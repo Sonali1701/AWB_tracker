@@ -164,11 +164,17 @@ def get_credentials():
             st.session_state.auth_url = ""
             st.rerun()
 
-    # Handle OAuth2 callback
-    if 'code' in st.query_params:
+    # Handle OAuth2 callback - check both query params and URL fragments
+    query_params = st.query_params
+    if 'code' in query_params or 'code' in st.experimental_get_query_params():
         try:
+            # Get the code from either the new or old query params
+            code = query_params.get('code') or st.experimental_get_query_params().get('code')
+            if isinstance(code, list):
+                code = code[0]
+
             flow = get_flow()
-            flow.fetch_token(code=st.query_params['code'])
+            flow.fetch_token(code=code)
             creds = flow.credentials
 
             st.session_state.credentials = {
@@ -180,7 +186,9 @@ def get_credentials():
                 'scopes': creds.scopes
             }
 
+            # Clear the code from the URL
             st.query_params.clear()
+            # Force a rerun to update the UI
             st.rerun()
 
         except Exception as e:
@@ -190,19 +198,17 @@ def get_credentials():
             st.rerun()
 
     # If we get here, we need to authenticate
-    flow = get_flow()
-    auth_url, _ = flow.authorization_url(
-        access_type='offline',
-        prompt='consent',
-        include_granted_scopes='true'
-    )
-    st.session_state.auth_url = auth_url
+    # But first, check if we're in the middle of an OAuth flow
+    if not st.session_state.get('auth_url'):
+        flow = get_flow()
+        auth_url, _ = flow.authorization_url(
+            access_type='offline',
+            prompt='consent',
+            include_granted_scopes='true'
+        )
+        st.session_state.auth_url = auth_url
 
-    # Show login button
-    st.warning("Please sign in with Google to access your Google Sheets")
-    st.link_button("🔑 Sign in with Google", auth_url)
-    st.stop()
-
+    # Don't show the login button here - it's handled in show_auth_ui
     return None
 
 
