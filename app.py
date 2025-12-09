@@ -129,44 +129,66 @@ def show_auth_ui():
 
 
 def get_flow():
-    """Create and return a Flow instance for OAuth2."""
+    """Create and return a Flow instance for OAuth2 with proper configuration."""
     try:
-        # For Streamlit Cloud
+        # Get redirect URI - prefer environment variable over secrets
+        redirect_uri = os.environ.get(
+            'REDIRECT_URI',
+            st.secrets.get('REDIRECT_URI', 'http://localhost:8501')
+        )
+        
+        # Create client config with proper token and auth URIs
         client_config = {
             "web": {
                 "client_id": st.secrets["GOOGLE_CLIENT_ID"],
                 "client_secret": st.secrets["GOOGLE_CLIENT_SECRET"],
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [st.secrets.get("REDIRECT_URI", "http://localhost:8501")]
+                "redirect_uris": [redirect_uri],
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs"
             }
         }
-        return Flow.from_client_config(
-            client_config,
+        
+        # Additional parameters for the OAuth flow
+        flow = Flow.from_client_config(
+            client_config=client_config,
             scopes=SCOPES,
-            redirect_uri=st.secrets.get("REDIRECT_URI", "http://localhost:8501")
+            redirect_uri=redirect_uri
         )
+        
+        # Enable PKCE (Proof Key for Code Exchange) for better security
+        flow.code_verifier = None  # Let the library handle PKCE
+        
+        return flow
+        
+    except KeyError as e:
+        st.error(f"Missing required configuration: {e}")
+        st.stop()
     except Exception as e:
-        st.error("Error initializing OAuth flow. Please check your configuration.")
+        st.error(f"Error initializing OAuth flow: {str(e)}")
         st.stop()
 
 
 def get_credentials():
     """Get valid user credentials from session state or prompt user to log in."""
-    # Debug: Print current session state
-    st.session_state.debug = st.session_state.get('debug', {})
+    # Initialize debug info
+    debug_info = {}
     
     # Check if we have valid credentials in session state
     if st.session_state.get('credentials') and st.session_state.credentials.get('token'):
         try:
+            # Create credentials object from session state
             creds = Credentials(
-                token=st.session_state.credentials['token'],
+                token=st.session_state.credentials.get('token'),
                 refresh_token=st.session_state.credentials.get('refresh_token'),
-                token_uri=st.session_state.credentials.get('token_uri'),
+                token_uri=st.session_state.credentials.get('token_uri', 'https://oauth2.googleapis.com/token'),
                 client_id=st.session_state.credentials.get('client_id'),
                 client_secret=st.session_state.credentials.get('client_secret'),
-                scopes=st.session_state.credentials.get('scopes')
+                scopes=st.session_state.credentials.get('scopes', SCOPES)
             )
+            
+            debug_info['has_credentials'] = True
+            debug_info['token_expired'] = creds.expired if hasattr(creds, 'expired') else 'unknown'
 
             # Refresh token if expired
             if creds and creds.expired and creds.refresh_token:
@@ -180,33 +202,44 @@ def get_credentials():
                         'client_secret': creds.client_secret,
                         'scopes': creds.scopes
                     }
-                    st.session_state.debug['last_refresh'] = 'Token refreshed successfully'
+                    debug_info['token_refreshed'] = True
                 except Exception as e:
-                    st.session_state.debug['refresh_error'] = str(e)
+                    debug_info['refresh_error'] = str(e)
                     st.session_state.credentials = None
                     st.session_state.auth_url = ""
                     st.rerun()
-
-            st.session_state.debug['auth_status'] = 'Using existing credentials'
+            
+            debug_info['auth_status'] = 'Using existing credentials'
+            st.session_state.debug = debug_info
             return creds
             
         except Exception as e:
-            st.session_state.debug['init_error'] = str(e)
+            debug_info['init_error'] = str(e)
             st.session_state.credentials = None
             st.session_state.auth_url = ""
             st.rerun()
 
     # Handle OAuth2 callback
-    query_params = st.query_params
+    query_params = dict(st.query_params)
+    debug_info['query_params'] = {k: v for k, v in query_params.items() if k != 'code'}
+    
     if 'code' in query_params:
         try:
             # Get the authorization code
             code = query_params['code']
-            st.session_state.debug['oauth_flow'] = 'Processing OAuth callback'
+            debug_info['oauth_flow'] = 'Processing OAuth callback'
             
             # Get the flow and exchange the code for tokens
             flow = get_flow()
-            flow.fetch_token(code=code)
+            
+            # Fetch token with the correct redirect_uri
+            token_response = flow.fetch_token(
+                token_uri=flow.oauth2session.token_auth.client_id and flow.oauth2session.token_auth.client_secret and 'https://oauth2.googleapis.com/token',
+                code=code,
+                include_client_id=True,
+                code_verifier=flow.code_verifier
+            )
+            
             creds = flow.credentials
             
             # Store the credentials in session state
@@ -216,16 +249,17 @@ def get_credentials():
                 'token_uri': creds.token_uri,
                 'client_id': creds.client_id,
                 'client_secret': creds.client_secret,
-                'scopes': creds.scopes
+                'scopes': creds.scopes,
+                'expiry': creds.expiry.isoformat() if creds.expiry else None
             }
             
             # Clear the code from the URL and force a rerun
-            st.session_state.debug['oauth_success'] = 'Authentication successful'
+            debug_info['oauth_success'] = 'Authentication successful'
             st.query_params.clear()
             st.rerun()
             
         except Exception as e:
-            st.session_state.debug['oauth_error'] = str(e)
+            debug_info['oauth_error'] = str(e)
             st.session_state.credentials = None
             st.session_state.auth_url = ""
             st.rerun()
@@ -234,20 +268,24 @@ def get_credentials():
     if not st.session_state.get('auth_url'):
         try:
             flow = get_flow()
-            auth_url, _ = flow.authorization_url(
+            auth_url, state = flow.authorization_url(
                 access_type='offline',
                 prompt='consent',
-                include_granted_scopes='true'
+                include_granted_scopes='true',
+                state=secrets.token_hex(16)  # Add state for CSRF protection
             )
             st.session_state.auth_url = auth_url
-            st.session_state.debug['auth_flow'] = 'Generated new auth URL'
+            st.session_state.oauth_state = state
+            debug_info['auth_flow'] = 'Generated new auth URL'
         except Exception as e:
-            st.session_state.debug['auth_url_error'] = str(e)
+            debug_info['auth_url_error'] = str(e)
     
-    # Debug information (comment out in production)
-    if st.session_state.debug:
-        with st.sidebar.expander("Debug Info"):
-            st.json(st.session_state.debug)
+    # Store debug info in session state
+    st.session_state.debug = debug_info
+    
+    # Show debug info in sidebar (comment out in production)
+    with st.sidebar.expander("Debug Info"):
+        st.json(debug_info)
     
     return None
 
