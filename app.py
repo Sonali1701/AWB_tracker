@@ -835,25 +835,65 @@ def main():
         layout="wide"
     )
 
-    # Check for OAuth callback
-    if 'code' in st.query_params and not st.session_state.credentials:
-        # This will be handled by get_credentials()
-        pass
+    # Initialize session state for authentication
+    if 'auth_initialized' not in st.session_state:
+        st.session_state.auth_initialized = True
+        st.session_state.credentials = None
+        st.session_state.auth_url = ""
+        st.session_state.processing_callback = False
 
-    # Show authentication UI
+    st.title("DHL Tracking Automation")
+    st.write("Track your DHL packages and update Google Sheets automatically.")
+
+    # Debug info
+    debug_info = {
+        'has_credentials': bool(st.session_state.get('credentials')),
+        'query_params': dict(st.query_params),
+        'processing_callback': st.session_state.get('processing_callback', False)
+    }
+
+    # Show authentication UI and get sheet settings
     sheet_id, sheet_name = show_auth_ui()
+    
+    # Handle OAuth callback
+    if 'code' in st.query_params and not st.session_state.get('processing_callback'):
+        st.session_state.processing_callback = True
+        st.rerun()
 
+    # Check authentication status
+    if not st.session_state.get('credentials'):
+        st.warning("Please sign in with Google to continue")
+        
+        # Show debug info in expander
+        with st.sidebar.expander("Debug Info"):
+            st.json(debug_info)
+            
+            if st.button("Force Refresh"):
+                st.session_state.processing_callback = False
+                st.query_params.clear()
+                st.rerun()
+                
+        st.stop()
+
+    # If we get here, user is authenticated
+    st.success("✅ Successfully authenticated with Google")
+    
+    # Show debug info in sidebar
+    with st.sidebar.expander("Debug Info"):
+        st.json({
+            **debug_info,
+            'has_sheet_id': bool(sheet_id),
+            'sheet_name': sheet_name
+        })
+    
+    # Show the main app interface
+    st.write("You are now authenticated and can track packages.")
+    
     # Main app
     st.title("🚚 DHL Tracking Automation")
     st.write("Track your DHL packages and update Google Sheets automatically.")
 
     # Only show the rest of the app if we're authenticated and have a sheet ID
-    if not st.session_state.credentials:
-        st.warning("Please sign in with Google to continue")
-        if st.session_state.auth_url:
-            st.link_button("🔑 Sign in with Google", st.session_state.auth_url)
-        st.stop()
-
     if not sheet_id:
         st.info("👈 Please enter your Google Sheet ID in the sidebar")
         st.stop()
