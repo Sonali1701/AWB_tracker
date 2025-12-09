@@ -835,40 +835,29 @@ def main():
         layout="wide"
     )
 
-    # Initialize session state for tracking if we've processed the auth callback
-    if 'auth_processed' not in st.session_state:
-        st.session_state.auth_processed = False
+    # Check for OAuth callback
+    if 'code' in st.query_params and not st.session_state.credentials:
+        # This will be handled by get_credentials()
+        pass
 
-    # Handle OAuth callback first
-    query_params = st.query_params
-    if 'code' in query_params and not st.session_state.auth_processed:
-        try:
-            # Process the OAuth callback
-            flow = get_flow()
-            flow.fetch_token(code=query_params['code'])
-            creds = flow.credentials
+    # Show authentication UI
+    sheet_id, sheet_name = show_auth_ui()
 
-            # Store credentials in session state
-            st.session_state.credentials = {
-                'token': creds.token,
-                'refresh_token': creds.refresh_token,
-                'token_uri': creds.token_uri,
-                'client_id': creds.client_id,
-                'client_secret': creds.client_secret,
-                'scopes': creds.scopes
-            }
+    # Main app
+    st.title("🚚 DHL Tracking Automation")
+    st.write("Track your DHL packages and update Google Sheets automatically.")
 
-            # Mark as processed and clear the URL
-            st.session_state.auth_processed = True
-            st.query_params.clear()
+    # Only show the rest of the app if we're authenticated and have a sheet ID
+    if not st.session_state.credentials:
+        st.warning("Please sign in with Google to continue")
+        if st.session_state.auth_url:
+            st.link_button("🔑 Sign in with Google", st.session_state.auth_url)
+        st.stop()
 
-            # Force a rerun to update the UI
-            st.rerun()
+    if not sheet_id:
+        st.info("👈 Please enter your Google Sheet ID in the sidebar")
+        st.stop()
 
-        except Exception as e:
-            st.error(f"Error processing authentication: {str(e)}")
-            st.session_state.credentials = None
-            st.session_state.auth_processed = False
     # Test connection to Google Sheet
     if st.sidebar.button("🔍 Test Connection"):
         with st.spinner("Testing connection to Google Sheet..."):
