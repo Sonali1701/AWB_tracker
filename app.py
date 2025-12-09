@@ -834,26 +834,57 @@ def main():
         page_icon="🚚",
         layout="wide"
     )
-
-    # Check for OAuth callback
-    if 'code' in st.query_params and not st.session_state.credentials:
-        # This will be handled by get_credentials()
-        pass
-
-    # Show authentication UI
+    
+    # Initialize debug state
+    if 'show_debug' not in st.session_state:
+        st.session_state.show_debug = False
+    
+    # Show debug toggle in sidebar
+    st.session_state.show_debug = st.sidebar.checkbox("Show debug info", value=st.session_state.show_debug)
+    
+    # Get credentials and handle OAuth flow
+    creds = get_credentials()
+    
+    # Show auth UI and get sheet settings
     sheet_id, sheet_name = show_auth_ui()
-
-    # Main app
+    
+    # Update authentication state
+    st.session_state.authenticated = creds is not None and creds.valid
+    
+    # Debug information
+    if st.session_state.show_debug:
+        with st.sidebar.expander("Debug Info", expanded=True):
+            st.json({
+                "authenticated": st.session_state.authenticated,
+                "has_creds": creds is not None,
+                "creds_valid": creds.valid if creds else False,
+                "creds_expired": creds.expired if creds else None,
+                "sheet_id": sheet_id,
+                "sheet_name": sheet_name,
+                "query_params": dict(st.query_params),
+                "session_state_keys": list(st.session_state.keys())
+            })
+    
+    # Main app header
     st.title("🚚 DHL Tracking Automation")
     st.write("Track your DHL packages and update Google Sheets automatically.")
-
-    # Only show the rest of the app if we're authenticated and have a sheet ID
-    if not st.session_state.credentials:
-        st.warning("Please sign in with Google to continue")
-        if st.session_state.auth_url:
-            st.link_button("🔑 Sign in with Google", st.session_state.auth_url)
+    
+    # Show appropriate UI based on authentication state
+    if not st.session_state.authenticated:
+        st.warning("🔒 Please sign in with Google to track packages")
+        if st.session_state.get('auth_url'):
+            st.markdown(f"""
+                <a href="{st.session_state.auth_url}" target="_self">
+                    <button style="background-color: #4285F4; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;">
+                        🔑 Sign in with Google
+                    </button>
+                </a>
+            """, unsafe_allow_html=True)
         st.stop()
-
+    
+    # Show main app content if authenticated
+    st.success("✅ Successfully authenticated with Google Sheets")
+    
     if not sheet_id:
         st.info("👈 Please enter your Google Sheet ID in the sidebar")
         st.stop()
