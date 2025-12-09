@@ -48,12 +48,6 @@ def show_auth_ui():
         st.session_state.sheet_id = ""
         st.session_state.sheet_name = "Sheet1"
     
-    # Check if we're handling an OAuth callback
-    query_params = st.query_params
-    if 'code' in query_params and not st.session_state.get('processing_callback', False):
-        st.session_state.processing_callback = True
-        st.rerun()
-    
     # Get or create auth URL if needed
     if not st.session_state.get('auth_url') and not st.session_state.get('credentials'):
         try:
@@ -74,7 +68,6 @@ def show_auth_ui():
         st.session_state.sheet_id = ""
         st.session_state.auth_url = ""
         st.session_state.sheet_name = "Sheet1"
-        st.session_state.processing_callback = False
         st.query_params.clear()
         st.rerun()
     
@@ -835,10 +828,12 @@ def main():
         layout="wide"
     )
 
-    # Check for OAuth callback
-    if 'code' in st.query_params and not st.session_state.credentials:
-        # This will be handled by get_credentials()
-        pass
+    # Process OAuth callback FIRST, before showing UI
+    # This ensures credentials are stored in session state before display
+    if 'code' in st.query_params:
+        get_credentials()
+        # After successful auth, get_credentials() clears query_params and reruns
+        # So if we reach here on the callback rerun, credentials should be set
 
     # Show authentication UI
     sheet_id, sheet_name = show_auth_ui()
