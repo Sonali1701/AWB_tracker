@@ -37,69 +37,95 @@ if 'auth_url' not in st.session_state:
 
 
 def show_auth_ui():
-    """Show authentication UI."""
+    """Show authentication UI and handle authentication state."""
     st.sidebar.title("🔐 Authentication")
-
-    # Initialize auth_url in session state if not exists
-    if 'auth_url' not in st.session_state:
+    
+    # Initialize session state variables if they don't exist
+    if 'auth_initialized' not in st.session_state:
+        st.session_state.auth_initialized = True
         st.session_state.auth_url = ""
-
-    # Create OAuth flow and get auth URL if not already done
-    if not st.session_state.auth_url and not st.session_state.get('credentials'):
-        flow = get_flow()
-        auth_url, _ = flow.authorization_url(
-            access_type='offline',
-            prompt='consent',
-            include_granted_scopes='true'
-        )
-        st.session_state.auth_url = auth_url
-
+        st.session_state.credentials = None
+        st.session_state.sheet_id = ""
+        st.session_state.sheet_name = "Sheet1"
+    
+    # Check if we're handling an OAuth callback
+    query_params = st.query_params
+    if 'code' in query_params and not st.session_state.get('processing_callback', False):
+        st.session_state.processing_callback = True
+        st.rerun()
+    
+    # Get or create auth URL if needed
+    if not st.session_state.get('auth_url') and not st.session_state.get('credentials'):
+        try:
+            flow = get_flow()
+            auth_url, _ = flow.authorization_url(
+                access_type='offline',
+                prompt='consent',
+                include_granted_scopes='true'
+            )
+            st.session_state.auth_url = auth_url
+        except Exception as e:
+            st.error(f"Error initializing authentication: {str(e)}")
+            return "", ""
+    
+    # Handle sign out
+    if st.session_state.get('credentials') and st.sidebar.button("Sign out"):
+        st.session_state.credentials = None
+        st.session_state.sheet_id = ""
+        st.session_state.auth_url = ""
+        st.session_state.sheet_name = "Sheet1"
+        st.session_state.processing_callback = False
+        st.query_params.clear()
+        st.rerun()
+    
+    # Show authentication status and controls
     if st.session_state.get('credentials'):
         st.sidebar.success("✅ Signed in with Google")
-        if st.sidebar.button("Sign out"):
-            st.session_state.credentials = None
-            st.session_state.sheet_id = ""
-            st.session_state.auth_url = ""
-            st.rerun()
     else:
         st.sidebar.warning("Not signed in")
-        if st.session_state.auth_url:
+        if st.session_state.get('auth_url'):
             st.sidebar.markdown(f"""
                 <a href="{st.session_state.auth_url}" target="_self">
-                    <button style="background-color: #4285F4; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;">
+                    <button style="width: 100%; background-color: #4285F4; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; margin: 0.5rem 0;">
                         🔑 Sign in with Google
                     </button>
                 </a>
             """, unsafe_allow_html=True)
-
+    
     st.sidebar.markdown("---")
-
-    # Google Sheet settings (only show if authenticated)
+    
+    # Show Google Sheet settings if authenticated
     if st.session_state.get('credentials'):
         st.sidebar.title("📋 Google Sheet Settings")
+        
+        # Sheet ID input
         sheet_id = st.sidebar.text_input(
             "Google Sheet ID",
             value=st.session_state.get('sheet_id', ''),
-            help="The ID from your Google Sheet URL (the long string in the URL after /d/ and before /edit)"
+            help="The ID from your Google Sheet URL (the long string in the URL after /d/ and before /edit)",
+            key="sheet_id_input"
         )
-
-        if sheet_id != st.session_state.get('sheet_id', ''):
-            st.session_state.sheet_id = sheet_id
-            st.rerun()
-
+        
+        # Sheet name input
         sheet_name = st.sidebar.text_input(
             "Sheet Name",
             value=st.session_state.get('sheet_name', 'Sheet1'),
-            help="The name of the sheet tab in your Google Sheet"
+            help="The name of the sheet tab in your Google Sheet",
+            key="sheet_name_input"
         )
-
+        
+        # Update session state if values changed
+        if sheet_id != st.session_state.get('sheet_id', ''):
+            st.session_state.sheet_id = sheet_id
+            st.rerun()
+            
         if sheet_name != st.session_state.get('sheet_name', 'Sheet1'):
             st.session_state.sheet_name = sheet_name
             st.rerun()
-
+        
         return sheet_id, sheet_name
-
-    return "", "Sheet1"
+    
+    return "", ""
 
 
 def get_flow():
