@@ -127,6 +127,9 @@ def get_flow():
 
 def get_credentials():
     """Get valid user credentials from session state or prompt user to log in."""
+    # Debug: Print current session state
+    st.session_state.debug = st.session_state.get('debug', {})
+    
     # Check if we have valid credentials in session state
     if st.session_state.get('credentials') and st.session_state.credentials.get('token'):
         try:
@@ -151,32 +154,36 @@ def get_credentials():
                         'client_secret': creds.client_secret,
                         'scopes': creds.scopes
                     }
+                    st.session_state.debug['last_refresh'] = 'Token refreshed successfully'
                 except Exception as e:
-                    st.error(f"Error refreshing token: {str(e)}")
+                    st.session_state.debug['refresh_error'] = str(e)
                     st.session_state.credentials = None
                     st.session_state.auth_url = ""
                     st.rerun()
 
+            st.session_state.debug['auth_status'] = 'Using existing credentials'
             return creds
+            
         except Exception as e:
-            st.error(f"Error initializing credentials: {str(e)}")
+            st.session_state.debug['init_error'] = str(e)
             st.session_state.credentials = None
             st.session_state.auth_url = ""
             st.rerun()
 
-    # Handle OAuth2 callback - check both query params and URL fragments
+    # Handle OAuth2 callback
     query_params = st.query_params
-    if 'code' in query_params or 'code' in st.experimental_get_query_params():
+    if 'code' in query_params:
         try:
-            # Get the code from either the new or old query params
-            code = query_params.get('code') or st.experimental_get_query_params().get('code')
-            if isinstance(code, list):
-                code = code[0]
-
+            # Get the authorization code
+            code = query_params['code']
+            st.session_state.debug['oauth_flow'] = 'Processing OAuth callback'
+            
+            # Get the flow and exchange the code for tokens
             flow = get_flow()
             flow.fetch_token(code=code)
             creds = flow.credentials
-
+            
+            # Store the credentials in session state
             st.session_state.credentials = {
                 'token': creds.token,
                 'refresh_token': creds.refresh_token,
@@ -185,30 +192,37 @@ def get_credentials():
                 'client_secret': creds.client_secret,
                 'scopes': creds.scopes
             }
-
-            # Clear the code from the URL
+            
+            # Clear the code from the URL and force a rerun
+            st.session_state.debug['oauth_success'] = 'Authentication successful'
             st.query_params.clear()
-            # Force a rerun to update the UI
             st.rerun()
-
+            
         except Exception as e:
-            st.error(f"Authentication failed: {str(e)}")
+            st.session_state.debug['oauth_error'] = str(e)
             st.session_state.credentials = None
             st.session_state.auth_url = ""
             st.rerun()
-
+    
     # If we get here, we need to authenticate
-    # But first, check if we're in the middle of an OAuth flow
     if not st.session_state.get('auth_url'):
-        flow = get_flow()
-        auth_url, _ = flow.authorization_url(
-            access_type='offline',
-            prompt='consent',
-            include_granted_scopes='true'
-        )
-        st.session_state.auth_url = auth_url
-
-    # Don't show the login button here - it's handled in show_auth_ui
+        try:
+            flow = get_flow()
+            auth_url, _ = flow.authorization_url(
+                access_type='offline',
+                prompt='consent',
+                include_granted_scopes='true'
+            )
+            st.session_state.auth_url = auth_url
+            st.session_state.debug['auth_flow'] = 'Generated new auth URL'
+        except Exception as e:
+            st.session_state.debug['auth_url_error'] = str(e)
+    
+    # Debug information (comment out in production)
+    if st.session_state.debug:
+        with st.sidebar.expander("Debug Info"):
+            st.json(st.session_state.debug)
+    
     return None
 
 
