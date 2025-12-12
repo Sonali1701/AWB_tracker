@@ -48,6 +48,12 @@ def show_auth_ui():
         st.session_state.sheet_id = ""
         st.session_state.sheet_name = "Sheet1"
     
+    # Check if we're handling an OAuth callback
+    query_params = st.query_params
+    if 'code' in query_params and not st.session_state.get('processing_callback', False):
+        st.session_state.processing_callback = True
+        st.rerun()
+    
     # Get or create auth URL if needed
     if not st.session_state.get('auth_url') and not st.session_state.get('credentials'):
         try:
@@ -68,6 +74,7 @@ def show_auth_ui():
         st.session_state.sheet_id = ""
         st.session_state.auth_url = ""
         st.session_state.sheet_name = "Sheet1"
+        st.session_state.processing_callback = False
         st.query_params.clear()
         st.rerun()
     
@@ -146,9 +153,8 @@ def get_flow():
 
 def get_credentials():
     """Get valid user credentials from session state or prompt user to log in."""
-    # Initialize debug if needed
-    if 'debug' not in st.session_state:
-        st.session_state.debug = {}
+    # Debug: Print current session state
+    st.session_state.debug = st.session_state.get('debug', {})
     
     # Check if we have valid credentials in session state
     if st.session_state.get('credentials') and st.session_state.credentials.get('token'):
@@ -174,16 +180,21 @@ def get_credentials():
                         'client_secret': creds.client_secret,
                         'scopes': creds.scopes
                     }
+                    st.session_state.debug['last_refresh'] = 'Token refreshed successfully'
                 except Exception as e:
+                    st.session_state.debug['refresh_error'] = str(e)
                     st.session_state.credentials = None
                     st.session_state.auth_url = ""
+                    st.rerun()
 
+            st.session_state.debug['auth_status'] = 'Using existing credentials'
             return creds
             
         except Exception as e:
+            st.session_state.debug['init_error'] = str(e)
             st.session_state.credentials = None
             st.session_state.auth_url = ""
-            return None
+            st.rerun()
 
     # Handle OAuth2 callback
     query_params = st.query_params
@@ -191,6 +202,7 @@ def get_credentials():
         try:
             # Get the authorization code
             code = query_params['code']
+            st.session_state.debug['oauth_flow'] = 'Processing OAuth callback'
             
             # Get the flow and exchange the code for tokens
             flow = get_flow()
@@ -208,13 +220,34 @@ def get_credentials():
             }
             
             # Clear the code from the URL and force a rerun
+            st.session_state.debug['oauth_success'] = 'Authentication successful'
             st.query_params.clear()
             st.rerun()
             
         except Exception as e:
+            st.session_state.debug['oauth_error'] = str(e)
             st.session_state.credentials = None
             st.session_state.auth_url = ""
             st.rerun()
+    
+    # If we get here, we need to authenticate
+    if not st.session_state.get('auth_url'):
+        try:
+            flow = get_flow()
+            auth_url, _ = flow.authorization_url(
+                access_type='offline',
+                prompt='consent',
+                include_granted_scopes='true'
+            )
+            st.session_state.auth_url = auth_url
+            st.session_state.debug['auth_flow'] = 'Generated new auth URL'
+        except Exception as e:
+            st.session_state.debug['auth_url_error'] = str(e)
+    
+    # Debug information (comment out in production)
+    if st.session_state.debug:
+        with st.sidebar.expander("Debug Info"):
+            st.json(st.session_state.debug)
     
     return None
 
@@ -795,19 +828,28 @@ def track_dhl_package(awb_number):
 
 
 def main():
-    # Set page config
+    # Set page config with additional security configurations
     st.set_page_config(
         page_title="DHL Tracking Automation",
         page_icon="🚚",
-        layout="wide"
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
+    
+    # Add CSP headers to handle security policies
+    st.markdown("""
+        <meta http-equiv="Content-Security-Policy" 
+              content="default-src 'self' https: 'unsafe-inline' 'unsafe-eval' 
+                      https://*.googleapis.com https://*.google.com https://*.segment.com https://*.google-analytics.com;
+                      img-src 'self' https: data:;
+                      media-src 'self' https: data:;
+                      frame-src 'self' https: data:;">
+    """, unsafe_allow_html=True)
 
-    # Process OAuth callback FIRST, before showing UI
-    # This ensures credentials are stored in session state before display
-    if 'code' in st.query_params:
-        get_credentials()
-        # After successful auth, get_credentials() clears query_params and reruns
-        # So if we reach here on the callback rerun, credentials should be set
+    # Check for OAuth callback
+    if 'code' in st.query_params and not st.session_state.credentials:
+        # This will be handled by get_credentials()
+        pass
 
     # Show authentication UI
     sheet_id, sheet_name = show_auth_ui()
@@ -852,8 +894,8 @@ def main():
             if dhl_awb:
                 with st.spinner(f"Tracking DHL package {dhl_awb}..."):
                     result = track_dhl_package(dhl_awb)
-                    if result and not result.startswith("Error"):
-                        st.success(f"Status: {result}")
+                    if result and 'status' in result:
+                        st.success(f"Status: {result['status']}")
                         # Update Google Sheet
                         if st.session_state.credentials and sheet_id:
                             update_sheet(
@@ -861,10 +903,8 @@ def main():
                                 sheet_name,
                                 "A1",
                                 [["AWB", "Status", "Last Updated"],
-                                 [dhl_awb, result, pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')]]
+                                 [dhl_awb, result['status'], pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')]]
                             )
-                    else:
-                        st.error(f"Tracking failed: {result}")
             else:
                 st.warning("Please enter a DHL AWB number")
 
@@ -875,8 +915,8 @@ def main():
             if ups_awb:
                 with st.spinner(f"Tracking UPS package {ups_awb}..."):
                     result = track_ups_package(ups_awb)
-                    if result and not result.startswith("Error"):
-                        st.success(f"Status: {result}")
+                    if result and 'status' in result:
+                        st.success(f"Status: {result['status']}")
                         # Update Google Sheet
                         if st.session_state.credentials and sheet_id:
                             update_sheet(
@@ -884,10 +924,8 @@ def main():
                                 sheet_name,
                                 "A1",
                                 [["AWB", "Status", "Last Updated"],
-                                 [ups_awb, result, pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')]]
+                                 [ups_awb, result['status'], pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')]]
                             )
-                    else:
-                        st.error(f"Tracking failed: {result}")
             else:
                 st.warning("Please enter a UPS tracking number")
 
@@ -898,8 +936,8 @@ def main():
             if fedex_awb:
                 with st.spinner(f"Tracking FedEx package {fedex_awb}..."):
                     result = track_fedex_package(fedex_awb)
-                    if result and not result.startswith("Error"):
-                        st.success(f"Status: {result}")
+                    if result and 'status' in result:
+                        st.success(f"Status: {result['status']}")
                         # Update Google Sheet
                         if st.session_state.credentials and sheet_id:
                             update_sheet(
@@ -907,10 +945,8 @@ def main():
                                 sheet_name,
                                 "A1",
                                 [["AWB", "Status", "Last Updated"],
-                                 [fedex_awb, result, pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')]]
+                                 [fedex_awb, result['status'], pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')]]
                             )
-                    else:
-                        st.error(f"Tracking failed: {result}")
             else:
                 st.warning("Please enter a FedEx tracking number")
 
@@ -919,7 +955,7 @@ def main():
     st.header("📋 Recent Tracking Data")
 
     if st.button("🔄 Refresh Data"):
-        st.rerun()
+        st.experimental_rerun()
 
     df = get_sheet_data(sheet_id, sheet_name, "A1:Z1000")
     if df is not None and not df.empty:
@@ -929,6 +965,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Always try to run main
-    # Secrets validation will happen inside main() through get_flow()
+    # Always call main() - Streamlit Cloud will handle the secrets
     main()
