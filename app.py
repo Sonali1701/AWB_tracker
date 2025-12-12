@@ -41,7 +41,7 @@ def get_flow() -> Flow:
         # Get the current URL for the redirect_uri
         current_url = st.query_params.get('_path', '')
         redirect_uri = f"https://sonali1701-awb-tracker-app-mzkwie.streamlit.app{current_url}"
-
+        
         flow = Flow.from_client_config(
             {
                 "web": {
@@ -57,12 +57,22 @@ def get_flow() -> Flow:
         )
         return flow
     else:
-        # Local development
-        return Flow.from_client_secrets_file(
-            'client_secret.json',
-            scopes=SCOPES,
-            redirect_uri='http://localhost:8501'
-        )
+        # For local development, use the client_secret.json file
+        try:
+            return Flow.from_client_secrets_file(
+                'client_secret.json',
+                scopes=SCOPES,
+                redirect_uri='http://localhost:8501'
+            )
+        except FileNotFoundError:
+            st.error("""
+                Error: client_secret.json not found. For local development:
+                1. Go to Google Cloud Console
+                2. Create OAuth 2.0 credentials
+                3. Download the client_secret.json
+                4. Place it in your project root directory
+            """)
+            st.stop()
 
 
 def handle_oauth_callback():
